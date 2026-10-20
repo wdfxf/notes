@@ -218,10 +218,12 @@ function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g
 function encPath(p){return p.split('/').map(encodeURIComponent).join('/');}
 function baseName(p){return p.split('/').pop().replace(/\.md$/i,'');}
 function catOf(p){
+  const parts=p.split('/');
+  if(parts.length>1)return parts[0];
   if(/^Jack 365/.test(p))return 'Jack365';
-  if(/^Jack/.test(p))return 'Jack';
+  if(/^Jack/.test(p))return 'Jack书';
   if(/^\d{4}-\d{2}-\d{2}/.test(p))return '日期笔记';
-  return '其他';
+  return '根目录';
 }
 
 /* ---------- API ---------- */
@@ -278,10 +280,25 @@ function splitRow(l){
 }
 function md(src){
   src=src.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/,'');
+
+  /* 1) 先把代码抽走（否则里面的 HTML 会被白名单误放行） */
+  const codes=[];
+  src=src.replace(/```[^\n]*\n([\s\S]*?)```/g,function(_,c){
+    codes.push('<pre><code>'+esc(c.replace(/\n$/,''))+'</code></pre>');
+    return '\u0002'+(codes.length-1)+'\u0003';
+  });
+  src=src.replace(/`([^`\n]+)`/g,function(_,c){
+    codes.push('<code>'+esc(c)+'</code>');
+    return '\u0002'+(codes.length-1)+'\u0003';
+  });
+
+  /* 2) 保护白名单 HTML（判据用的红色 span 等） */
   const keep=[];
-  src=src.replace(/<\/?(?:span|b|strong|br|i|em|div|u|sup|sub|font)(?:\s[^>]*)?\/?>/gi,function(m){
+  src=src.replace(/<\/?(?:span|b|strong|br|i|em|u|sup|sub|font|del)(?:\s[^>]*)?\/?>/gi,function(m){
     keep.push(m);return '\u0000'+(keep.length-1)+'\u0001';
   });
+
+  /* 3) 转义 → 4) 还原白名单 */
   src=esc(src);
   src=src.replace(/\u0000(\d+)\u0001/g,function(_,i){return keep[+i];});
 
@@ -290,6 +307,7 @@ function md(src){
   let i=0;
   while(i<L.length){
     const line=L[i];
+    if(/^\s*\u0002\d+\u0003\s*$/.test(line)){out.push(line.trim());i++;continue;}
     if(/^```/.test(line)){
       const buf=[];i++;
       while(i<L.length&&!/^```/.test(L[i])){buf.push(L[i]);i++;}
@@ -308,10 +326,18 @@ function md(src){
         '</tbody></table></div>');
       continue;
     }
-    if(/^>/.test(line)){
+    if(/^(&gt;|>)\s?/.test(line)){
       const buf=[];
-      while(i<L.length&&/^>/.test(L[i])){buf.push(L[i].replace(/^>\s?/,''));i++;}
-      out.push('<blockquote>'+md(buf.join('\n'))+'</blockquote>');continue;
+      while(i<L.length&&/^(&gt;|>)\s?/.test(L[i])){buf.push(L[i].replace(/^(&gt;|>)\s?/,''));i++;}
+      const paras=[];let cp=[];
+      buf.forEach(function(t){
+        if(!t.trim()){if(cp.length){paras.push(cp.join('<br>'));cp=[];}}
+        else cp.push(t);
+      });
+      if(cp.length)paras.push(cp.join('<br>'));
+      if(!paras.length)paras.push('');
+      out.push('<blockquote>'+paras.map(function(p){return '<p>'+inline(p)+'</p>';}).join('')+'</blockquote>');
+      continue;
     }
     if(/^\s*([-*+]|\d+\.)\s+/.test(line)){
       const ordered=/^\s*\d+\./.test(line);
@@ -329,12 +355,19 @@ function md(src){
     if(!buf.length){i++;continue;}
     out.push('<p>'+inline(buf.join('<br>'))+'</p>');
   }
-  return out.join('\n');
+  let html=out.join('\n');
+  html=html.replace(/\u0002(\d+)\u0003/g,function(_,i){return codes[+i];});
+  return html;
 }
 
 /* ---------- 列表渲染 ---------- */
+function buildCats(){
+  const m={};
+  files.forEach(f=>{m[f.cat]=(m[f.cat]||0)+1;});
+  return Object.keys(m).sort((a,b)=>m[b]-m[a]).slice(0,7);
+}
 function renderChips(){
-  const cats=['all','最近','Jack365','Jack','日期笔记','其他'];
+  const cats=['all','最近'].concat(buildCats());
   const el=document.getElementById('chips');
   el.innerHTML=cats.map(c=>'<div class="chip'+(curCat===c?' on':'')+'" data-c="'+c+'">'+
     (c==='all'?'全部':c)+'</div>').join('');
@@ -363,7 +396,8 @@ function renderList(){
   if(curCat==='最近'&&!arr.length&&!q){
     box.innerHTML='<div class="empty">还没打开过任何笔记</div>';return;
   }
-  box.innerHTML=arr.map(f=>{
+  const LIMIT=200, total=arr.length;
+  box.innerHTML=arr.slice(0,LIMIT).map(f=>{
     const ico=f.cat==='Jack365'?'365':f.cat==='Jack'?'J':f.cat==='日期笔记'?'日':'·';
     const sub=f.dir?f.dir:'';
     const isNew=f.cat==='Jack365'&&/第1[2-9]\d天/.test(f.name);
@@ -372,7 +406,7 @@ function renderList(){
       '<div class="nm">'+esc(f.name)+(sub?'<div class="sub">'+esc(sub)+'</div>':'')+'</div>'+
       (isNew?'<div class="badge">新</div>':'')+
       '</div>';
-  }).join('');
+  }).join('')+(total>LIMIT?'<div class="empty">还有 '+(total-LIMIT)+' 篇没显示<br>用上面的搜索，或点分类缩小范围</div>':'');
   box.querySelectorAll('.it').forEach(el=>{
     el.onclick=()=>openFile(el.dataset.p);
   });
