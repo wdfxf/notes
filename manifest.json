@@ -1,0 +1,19 @@
+{
+  "name": "我的思想库",
+  "short_name": "思想库",
+  "description": "把私人仓库里的笔记变成一个点开就能看的列表",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
