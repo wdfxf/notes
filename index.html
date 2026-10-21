@@ -222,6 +222,17 @@ function toast(t,ms){
 }
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function encPath(p){return p.split('/').map(encodeURIComponent).join('/');}
+function normRepo(v){
+  let s=(v||'').trim()
+    .replace(/^https?:\/\/github\.com\//i,'')
+    .replace(/^github\.com\//i,'')
+    .replace(/\.git$/i,'')
+    .replace(/[／]/g,'/')
+    .replace(/\/+$/,'')
+    .replace(/\s+/g,'');
+  if(s&&s.indexOf('/')<0)s='wdfxf/'+s;
+  return s;
+}
 function baseName(p){return p.split('/').pop().replace(/\.md$/i,'');}
 function catOf(p){
   const parts=p.split('/');
@@ -557,9 +568,10 @@ function msg(t,cls){
 }
 
 document.getElementById('btnSave').onclick=async function(){
-  const repo=document.getElementById('inRepo').value.trim().replace(/^https?:\/\/github\.com\//,'').replace(/\.git$/,'');
+  const repo=normRepo(document.getElementById('inRepo').value);
   const tok=document.getElementById('inTok').value.trim();
   if(!repo||!tok){msg('两栏都要填。','err');return;}
+  document.getElementById('inRepo').value=repo;
   S.repo=repo;S.token=tok;save();
   msg('正在连…','ok');
   try{
@@ -575,10 +587,11 @@ document.getElementById('btnSave').onclick=async function(){
   }
 };
 document.getElementById('btnDiag').onclick=function(){
-  const repo=document.getElementById('inRepo').value.trim().replace(/^https?:\/\/github\.com\//,'').replace(/\.git$/,'');
+  const repo=normRepo(document.getElementById('inRepo').value);
   const tok=document.getElementById('inTok').value.trim();
   if(!repo){msg('先填仓库名。','err');return;}
   if(!tok){msg('先把钥匙粘进第二栏，才能诊断。','err');return;}
+  document.getElementById('inRepo').value=repo;
   msg('','');
   diagnose(repo,tok);
 };
