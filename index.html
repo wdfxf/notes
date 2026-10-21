@@ -127,6 +127,10 @@ body.light #art strong{color:#000;}
 #msg{margin-top:14px;padding:12px 14px;border-radius:10px;font-size:13.5px;line-height:1.65;display:none;}
 #msg.err{display:block;background:var(--rdb);color:var(--rd);}
 #msg.ok{display:block;background:var(--acb);color:var(--ac);}
+#diagBox{display:none;margin-top:14px;padding:14px 15px;border-radius:11px;background:var(--sf);
+  border:1px solid var(--bd);font-size:13px;line-height:2;word-break:break-word;color:var(--tx2);}
+#diagBox.on{display:block;}
+#diagBox b{color:var(--tx);}
 
 /* ---------- 状态 ---------- */
 .loading{text-align:center;padding:60px 20px;color:var(--tx3);font-size:14px;}
@@ -187,8 +191,10 @@ body.light #art strong{color:#000;}
   </div>
 
   <button class="btn" id="btnSave">保存并试试能不能读到</button>
+  <button class="btn gh" id="btnDiag">连不上？点这里一步步诊断</button>
   <button class="btn gh" id="btnSkip">先看看界面（没钥匙读不到内容）</button>
   <div id="msg"></div>
+  <div id="diagBox"></div>
 </div>
 
 <script>
@@ -227,16 +233,93 @@ function catOf(p){
 }
 
 /* ---------- API ---------- */
-async function api(path,retry){
-  const r=await fetch('https://api.github.com'+path,{
-    headers:{'Authorization':'token '+S.token,'Accept':'application/vnd.github+json'}
-  });
-  if(r.status===401||r.status===403){
-    const e=new Error('AUTH');e.code=r.status;throw e;
+async function fetchT(url,opt,ms){
+  const c=new AbortController();
+  const t=setTimeout(function(){c.abort();},ms||14000);
+  try{
+    const o=Object.assign({},opt||{});
+    o.signal=c.signal;
+    return await fetch(url,o);
+  }finally{clearTimeout(t);}
+}
+async function api(path,retryN){
+  retryN=(retryN===undefined)?2:retryN;
+  let lastErr=null;
+  for(let k=0;k<=retryN;k++){
+    try{
+      const r=await fetchT('https://api.github.com'+path,{
+        headers:{'Authorization':'token '+S.token,'Accept':'application/vnd.github+json'}
+      });
+      if(r.status===401||r.status===403){const e=new Error('AUTH');e.code=r.status;throw e;}
+      if(r.status===404){const e=new Error('NOTFOUND');throw e;}
+      if(!r.ok){const e=new Error('HTTP '+r.status);e.code=r.status;throw e;}
+      return r.json();
+    }catch(e){
+      lastErr=e;
+      if(e.message==='AUTH'||e.message==='NOTFOUND')throw e;
+      if(k<retryN)await new Promise(function(s){setTimeout(s,900*(k+1));});
+    }
   }
-  if(r.status===404){const e=new Error('NOTFOUND');throw e;}
-  if(!r.ok){const e=new Error('HTTP '+r.status);throw e;}
-  return r.json();
+  throw lastErr||new Error('NETWORK');
+}
+
+/* ---------- 分步诊断 ---------- */
+async function diagnose(repo,tok){
+  const lines=[];
+  function add(s){lines.push(s);document.getElementById('diagBox').innerHTML=lines.join('<br>');}
+  const box=document.getElementById('diagBox');
+  box.classList.add('on');
+  box.innerHTML='';
+
+  add('<b>第 1 步 · 手机能不能连上 GitHub</b>');
+  let t0=Date.now();
+  try{
+    const r=await fetchT('https://api.github.com/rate_limit',null,12000);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    add('　✅ 通了（'+(Date.now()-t0)+'ms）');
+  }catch(e){
+    add('　❌ 连不上。这是网络问题，不是钥匙问题。');
+    add('');
+    add('<b>怎么办：</b>换一个网络再试——WiFi 换流量，流量换 WiFi。如果还是不行，说明你这边访问 GitHub 被限制了，钥匙再怎么填都没用。');
+    return;
+  }
+
+  add('<b>第 2 步 · 钥匙是不是有效的</b>');
+  try{
+    const r=await fetchT('https://api.github.com/user',{headers:{'Authorization':'token '+tok}},12000);
+    if(r.status===401){add('　❌ 钥匙无效。多半是复制时漏了字符，或者已经过期/被删。重新生成一个再粘。');return;}
+    if(!r.ok){add('　❌ 返回 '+r.status+'，先按无效处理，重新生成一个。');return;}
+    const u=await r.json();
+    add('　✅ 有效，账号是 <b>'+esc(u.login)+'</b>');
+  }catch(e){add('　❌ 检查时出错：'+esc(e.message));return;}
+
+  add('<b>第 3 步 · 这个钥匙能不能读你的仓库</b>');
+  try{
+    const r=await fetchT('https://api.github.com/repos/'+repo,{headers:{'Authorization':'token '+tok}},12000);
+    if(r.status===404){
+      add('　❌ 读不到 <b>'+esc(repo)+'</b>');
+      add('　两种可能：');
+      add('　① 仓库名写错了（要带用户名，格式 用户名/仓库名）');
+      add('　② 生成钥匙时没勾 <b>repo</b> 权限，或者 fine-grained 钥匙没选中这个仓库');
+      return;
+    }
+    if(r.status===403){add('　❌ 无权限（403）。重新生成钥匙，勾上 repo。');return;}
+    if(!r.ok){add('　❌ 返回 '+r.status);return;}
+    const j=await r.json();
+    add('　✅ 可读：<b>'+esc(j.full_name)+'</b>（'+(j.private?'私有':'公开')+'）');
+  }catch(e){add('　❌ 出错：'+esc(e.message));return;}
+
+  add('<b>第 4 步 · 能不能列出里面的笔记</b>');
+  try{
+    const m=await (await fetchT('https://api.github.com/repos/'+repo,{headers:{'Authorization':'token '+tok}},12000)).json();
+    const br=m.default_branch||'main';
+    const tr=await (await fetchT('https://api.github.com/repos/'+repo+'/git/trees/'+br+'?recursive=1',{headers:{'Authorization':'token '+tok}},20000)).json();
+    if(!tr.tree){add('　❌ 拿不到文件树：'+esc(tr.message||'未知错误'));return;}
+    const n=tr.tree.filter(function(x){return x.type==='blob'&&/\.md$/i.test(x.path);}).length;
+    add('　✅ 读到 <b>'+n+'</b> 篇笔记');
+    add('');
+    add('<b>全部通过。现在把设置页关掉，重新进来就有了。</b>');
+  }catch(e){add('　❌ 出错：'+esc(e.message));}
 }
 
 async function fetchFiles(){
@@ -454,8 +537,12 @@ async function boot(){
     renderChips();renderList();
     document.getElementById('barTitle').textContent='我的思想库 · '+files.length+' 篇';
   }catch(e){
-    document.getElementById('list').innerHTML='<div class="empty">连不上<br><br>'+
-      (e.message==='AUTH'?'钥匙失效或权限不够，点 ⚙ 换一个':esc(e.message))+'</div>';
+    let why='';
+    if(e&&e.name==='AbortError')why='网络超时了';
+    else if(e&&e.message==='AUTH')why='钥匙失效或权限不够';
+    else if(e&&e.message==='NOTFOUND')why='仓库名读不到';
+    else why='网络不通';
+    document.getElementById('list').innerHTML='<div class="empty">'+why+'<br><br>点右上角 ⚙ 进去，再点「连不上？点这里一步步诊断」</div>';
   }
 }
 function showSetup(){
@@ -486,6 +573,14 @@ document.getElementById('btnSave').onclick=async function(){
       ? '这个钥匙读不到仓库。检查两件事：①token 有没有勾 <b>repo</b> 权限 ②仓库名有没有写错（要带用户名）'
       : '连不上：'+esc(e.message),'err');
   }
+};
+document.getElementById('btnDiag').onclick=function(){
+  const repo=document.getElementById('inRepo').value.trim().replace(/^https?:\/\/github\.com\//,'').replace(/\.git$/,'');
+  const tok=document.getElementById('inTok').value.trim();
+  if(!repo){msg('先填仓库名。','err');return;}
+  if(!tok){msg('先把钥匙粘进第二栏，才能诊断。','err');return;}
+  msg('','');
+  diagnose(repo,tok);
 };
 document.getElementById('btnSkip').onclick=hideSetup;
 document.getElementById('btnSet').onclick=showSetup;
