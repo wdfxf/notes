@@ -903,6 +903,16 @@ document.getElementById('btnDiag').onclick=()=>{
 /* 返回键关闭阅读层 */
 window.addEventListener('popstate',()=>{if(document.getElementById('read').classList.contains('on'))closeRead();});
 
+/* 刷新时浏览器会把上次输入恢复进搜索框（比如仓库名），再清一次 */
+window.addEventListener('pageshow',function(){
+  var e=document.getElementById('q');
+  if(e.value&&e.value.indexOf('/')>=0)e.value='';
+});
+setTimeout(function(){
+  var e=document.getElementById('q');
+  if(e.value&&e.value.indexOf('/')>=0)e.value='';
+},400);
+
 boot();
 </script>
 </body>
