@@ -199,6 +199,15 @@ body.light #rbar{background:rgba(242,243,246,.9)}
 .ddate{display:block;font-size:11px;color:var(--tx3);margin-top:3px}
 .dgo{flex:0 0 auto;color:var(--tx3);font-size:16px}
 .chip .cn{font-size:10px;opacity:.65;margin-left:5px}
+.ub{display:inline-block;margin-top:6px;font-size:10px;padding:2px 6px;border-radius:6px;letter-spacing:.3px}
+.ub.ok{background:rgba(46,160,67,.16);color:#3fb950}
+.ub.mid{background:rgba(210,153,34,.18);color:#d29922}
+.ub.bad{background:rgba(248,81,73,.16);color:#f85149}
+.ub.risk{background:rgba(139,148,158,.16);color:#8b949e}
+body.light .ub.ok{color:#1a7f37}
+body.light .ub.mid{color:#9a6700}
+body.light .ub.bad{color:#cf222e}
+body.light .ub.risk{color:#57606a}
 
 /* 书卡片 / 书详情 */
 .bcard{margin:0 0 12px;padding:15px 14px;border-radius:15px;border:1px solid var(--bd);
@@ -283,6 +292,7 @@ const KEY='wbreader_v2';
 const DEF={repo:'wdfxf/p-life-system',token:'',fs:17,theme:'dark',recent:[],cat:'all'};
 let S=Object.assign({},DEF);
 let files=[], cache={}, curCat='all', folded={}, shown=300, contentHits=null, searching=false;
+let UND={}, lowOnly=false, guides=[];
 
 /* ---------- 存储 ---------- */
 function load(){
@@ -543,6 +553,36 @@ function buildBooks(){
     .map(f=>({path:f.path,name:f.name.replace(/^Jack·/,''),days:[],loaded:false}))
     .sort((a,b)=>a.name.localeCompare(b.name,'zh'));
 }
+
+/* ---------- 理解度 + 生活指南 ---------- */
+function buildGuide(){
+  const re=/^高性价比人生指南\/节(\d+)[ 　]*(.+)\.md$/;
+  guides=files.map(f=>{const m=f.path.match(re);return m?{path:f.path,n:+m[1],title:m[2].trim()}:null;}).filter(Boolean).sort((a,b)=>a.n-b.n);
+}
+function ubadge(key){
+  const u=UND[key]; if(!u)return '';
+  if(u.u===null||u.u===undefined||u.conf==='none')
+    return '<span class="ub risk">未测 · 风险 '+u.risk+'%</span>';
+  const cls=u.u>=75?'ok':(u.u>=60?'mid':'bad');
+  return '<span class="ub '+cls+'">理解 '+u.u+'%</span>';
+}
+function ulow(key){
+  const u=UND[key]; if(!u)return false;
+  if(u.u===null||u.u===undefined)return u.risk>=70;
+  return u.u<70;
+}
+async function loadUND(){
+  try{UND=JSON.parse(await fetchText('理解度.json'))||{};}catch(e){UND={};}
+}
+function guideHTML(){
+  const list=lowOnly?guides.filter(g=>ulow('guide-'+g.n)):guides;
+  if(!list.length)return '<div class="empty">没有符合条件的章节</div>';
+  return '<div class="lead">共 '+guides.length+' 章 · 查到就用，不用从头读'+(lowOnly?' · 只显示风险 ≥70 的':'')+'</div>'+
+    list.map(g=>'<div class="drow" data-p="'+esc(g.path)+'">'+
+      '<span class="dn2 g">'+g.n+'</span><span class="dbody">'+
+      '<span class="dtt">'+esc(g.title)+'</span>'+ubadge('guide-'+g.n)+
+      '</span><span class="dgo">›</span></div>').join('');
+}
 /* 从「共读进度」的 [[文件#第 N 天 · 日期 · 标题|别名]] 里抓天 */
 function parseDays(text){
   const out=[], seen={};
@@ -579,11 +619,14 @@ async function loadBooks(){
 /* ---------- 渲染 ---------- */
 function renderChips(){
   const el=document.getElementById('chips');
-  const items=[['exp','思想实验',expDays.length],['book','读书',books.reduce((s,b)=>s+b.days.length,0)]];
+  const items=[['exp','思想实验',expDays.length],['book','读书',books.reduce((s,b)=>s+b.days.length,0)],['guide','生活指南',guides.length]];
   el.innerHTML=items.map(it=>'<div class="chip'+(mode===it[0]?' on':'')+'" data-m="'+it[0]+'">'+
-    it[1]+'<span class="cn">'+it[2]+'</span></div>').join('');
+    it[1]+'<span class="cn">'+it[2]+'</span></div>').join('')+
+    '<div class="chip'+(lowOnly?' on':'')+'" data-low="1">只看没懂的</div>';
   el.querySelectorAll('.chip').forEach(c=>{
-    c.onclick=()=>{mode=c.dataset.m;curBook=null;renderChips();renderList();window.scrollTo(0,0);};
+    c.onclick=()=>{
+      if(c.dataset.low){lowOnly=!lowOnly;renderChips();renderList();window.scrollTo(0,0);return;}
+      mode=c.dataset.m;curBook=null;renderChips();renderList();window.scrollTo(0,0);};
   });
 }
 
@@ -596,17 +639,20 @@ function renderList(){
     box.innerHTML='<div class="empty">'+(S.token?'仓库里没读到东西':'还没设置钥匙')+'</div>';
     return;
   }
-  box.innerHTML=(mode==='book'&&curBook)?bookDetailHTML(curBook):(mode==='exp'?expHTML():bookHTML());
+  box.innerHTML=(mode==='book'&&curBook)?bookDetailHTML(curBook):(mode==='exp'?expHTML():(mode==='guide'?guideHTML():bookHTML()));
   bindItems(box);
 }
 
 function expHTML(){
   if(!expDays.length)return '<div class="empty">还没有思想实验</div>';
-  return '<div class="lead">最新在上 · 共 '+expDays.length+' 天</div>'+
-    '<div class="dcards">'+expDays.map(d=>
+  const list=lowOnly?expDays.filter(d=>ulow('365-'+d.n)):expDays;
+  if(!list.length)return '<div class="empty">没有符合条件的天</div>';
+  return '<div class="lead">最新在上 · 共 '+expDays.length+' 天'+(lowOnly?' · 只显示没消化的':'')+'</div>'+
+    '<div class="dcards">'+list.map(d=>
       '<div class="dcard" data-p="'+esc(d.path)+'">'+
         '<div class="dn">第 '+d.n+' 天</div>'+
         '<div class="dt">'+esc(d.title)+'</div>'+
+        ubadge('365-'+d.n)+
       '</div>').join('')+'</div>';
 }
 
@@ -643,6 +689,7 @@ function dayRow(b,d){
     '<span class="dn2 g">'+d.n+'</span>'+
     '<span class="dbody"><span class="dtt">'+esc(d.title)+'</span>'+
       (d.date?'<span class="ddate">'+d.date+'</span>':'<span class="ddate">日期未显示</span>')+
+      ubadge(b.name+'-'+d.n)+
     '</span><span class="dgo">›</span></div>';
 }
 
@@ -800,7 +847,7 @@ async function boot(){
   document.getElementById('list').innerHTML='<div class="loading"><div class="spin"></div>正在连仓库…</div>';
   try{
     files=await fetchFiles();
-    buildExp();buildBooks();
+    buildExp();buildBooks();buildGuide();await loadUND();
     renderChips();renderList();setTitle();
     loadBooks().then(()=>{renderChips();if(mode==='book')renderList();setTitle();});
   }catch(e){
@@ -830,7 +877,7 @@ document.getElementById('btnRefresh').onclick=async()=>{
   if(!S.token){showSetup();return;}
   cache={};contentHits=null;shown=300;
   document.getElementById('list').innerHTML='<div class="loading"><div class="spin"></div>刷新中…</div>';
-  try{files=await fetchFiles();buildExp();buildBooks();
+  try{files=await fetchFiles();buildExp();buildBooks();buildGuide();await loadUND();
     renderChips();renderList();setTitle();
     loadBooks().then(()=>{renderChips();if(mode==='book')renderList();setTitle();});
     toast('已刷新');
